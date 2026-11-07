@@ -11,18 +11,19 @@ services:
         ENGINES: ${ENGINES-@anthropic-ai/claude-code @openai/codex}
     image: ${OMB_LOCAL_IMAGE:-openmausbot-local:latest}
     restart: unless-stopped
-    volumes: ["data:/data"]
+    volumes:
+      - data:/data
     environment:
       OMB_PORT: "8799"
       OMB_WEBHOOK_PORT: "8800"
       OMB_PUBLIC_URL: "${OMB_PUBLIC_URL}"
-      OMB_WEBHOOK_PUBLIC_URL: "${OMB_WEBHOOK_PUBLIC_URL:-${OMB_PUBLIC_URL}}"
+      OMB_WEBHOOK_PUBLIC_URL: "${OMB_PUBLIC_URL}"
     healthcheck:
       test:
         - CMD
         - node
         - -e
-        - "fetch('http://127.0.0.1:8799/api/health',{signal:AbortSignal.timeout(4000)}).then(async(r)=>{if(!r.ok||!(await(r.text())).includes('openmausbot'))process.exit(1)}).catch(()=>process.exit(1))"
+        - "fetch('http://127.0.0.1:8799/api/health',{signal:AbortSignal.timeout(4000)}).then(async(r)=>{if(!r.ok||!(await r.text()).includes('openmausbot'))process.exit(1)}).catch(()=>process.exit(1))"
       interval: 15s
       timeout: 5s
       start_period: 30s
@@ -31,31 +32,35 @@ services:
   caddy:
     image: ${CADDY_IMAGE:-caddy:2}
     restart: unless-stopped
-    ports: ["8080:80"]
-    entrypoint: ["/bin/sh","-ec"]
+    ports:
+      - "8080:80"
+    depends_on:
+      omb:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -ec
     command:
       - |
-        printf '%s\n' ':80 {
+        cat > /etc/caddy/Caddyfile <<'EOF'
+        :80 {
           encode zstd gzip
+
           handle /hooks/* {
-            reverse_proxy omb:8800
+            reverse_proxy omb:8800 {
+              header_up X-Forwarded-Proto https
+            }
           }
+
           handle {
             reverse_proxy omb:8799 {
               header_up X-Forwarded-Proto https
               flush_interval -1
             }
           }
-        }' > /etc/caddy/Caddyfile
+        }
+        EOF
         exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
-    depends_on:
-      omb:
-        condition: service_healthy
-
 
 volumes:
-  data:
-    external: ${OMB_DATA_EXTERNAL:-false}
-    name: ${OMB_DATA_VOLUME:-${COMPOSE_PROJECT_NAME:-openmausbot}_data}
-  caddy_data: {}
-  caddy_config: {}
+  data: {}
